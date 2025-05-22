@@ -4,7 +4,7 @@ A program for distributing tokens efficiently via uploading a [Merkle root](http
 
 ## Claiming Airdrop via CLI
 
-To claim via CLI instead of using `https://jito.network/airdrop`, run the following commands.
+To claim via CLI run the following commands.
 
 1. Build the cli (must have rust + cargo installed):
 

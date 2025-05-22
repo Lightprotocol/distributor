@@ -25,3 +25,5 @@ bytemuck = { workspace = true }
 jito-merkle-verify = { path = "../../verify" }
 solana-program = { workspace = true }
 solana-security-txt = { workspace = true }
+light-sdk = { version = "0.12.0", features = ["anchor"] }
+light-hasher = { version = "3" }

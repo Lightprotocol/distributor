@@ -7,6 +7,11 @@ use anchor_spl::{
     token::{Token, TokenAccount},
 };
 use jito_merkle_verify::verify;
+use light_sdk::{
+    account::LightAccount, account_info::AccountInfoTrait, cpi::invoke_light_system_program,
+    light_compressed_account::instruction_data::with_account_info::CompressedAccountInfo,
+    NewAddressParams, NewAddressParamsPacked, ValidityProof,
+};
 
 use crate::{
     error::ErrorCode,
@@ -28,20 +33,19 @@ pub struct NewClaim<'info> {
     #[account(mut)]
     pub distributor: Account<'info, MerkleDistributor>,
 
-    /// Claim status PDA
-    #[account(
-        init,
-        seeds = [
-            b"ClaimStatus".as_ref(),
-            claimant.key().to_bytes().as_ref(),
-            distributor.key().to_bytes().as_ref()
-        ],
-        bump,
-        space = ClaimStatus::LEN,
-        payer = claimant
-    )]
-    pub claim_status: Account<'info, ClaimStatus>,
-
+    // /// Claim status PDA
+    // #[account(
+    //     init,
+    //     seeds = [
+    //         b"ClaimStatus".as_ref(),
+    //         claimant.key().to_bytes().as_ref(),
+    //         distributor.key().to_bytes().as_ref()
+    //     ],
+    //     bump,
+    //     space = ClaimStatus::LEN,
+    //     payer = claimant
+    // )]
+    // pub claim_status: Account<'info, ClaimStatus>,
     /// Distributor ATA containing the tokens to distribute.
     #[account(
         mut,
@@ -65,9 +69,8 @@ pub struct NewClaim<'info> {
 
     /// SPL [Token] program.
     pub token_program: Program<'info, Token>,
-
-    /// The [System] program.
-    pub system_program: Program<'info, System>,
+    // /// The [System] program.
+    // pub system_program: Program<'info, System>,
 }
 
 /// Initializes a new claim from the [MerkleDistributor].
@@ -81,11 +84,13 @@ pub struct NewClaim<'info> {
 ///     3. Num nodes claimed is less than max_num_nodes
 ///     4. The merkle proof is valid
 #[allow(clippy::result_large_err)]
-pub fn handle_new_claim(
-    ctx: Context<NewClaim>,
+pub fn handle_new_claim<'info>(
+    ctx: Context<'_, '_, '_, 'info, NewClaim<'info>>,
     amount_unlocked: u64,
     amount_locked: u64,
     proof: Vec<[u8; 32]>,
+    validity_proof: ValidityProof,
+    address_merkle_tree_root_index: u16,
 ) -> Result<()> {
     let distributor = &mut ctx.accounts.distributor;
 
@@ -119,13 +124,12 @@ pub fn handle_new_claim(
         ErrorCode::InvalidProof
     );
 
-    let claim_status = &mut ctx.accounts.claim_status;
-
-    // Seed initial values
-    claim_status.claimant = claimant_account.key();
-    claim_status.locked_amount = amount_locked;
-    claim_status.unlocked_amount = amount_unlocked;
-    claim_status.locked_amount_withdrawn = 0;
+    let claim_status = ClaimStatus {
+        claimant: claimant_account.key(),
+        locked_amount: amount_locked,
+        unlocked_amount: amount_unlocked,
+        locked_amount_withdrawn: 0,
+    };
 
     let seeds = [
         b"MerkleDistributor".as_ref(),
@@ -133,6 +137,36 @@ pub fn handle_new_claim(
         &distributor.version.to_le_bytes(),
         &[ctx.accounts.distributor.bump],
     ];
+    let merkle_tree_pubkey = ctx.remaining_accounts[0].key;
+    // let seed = light_sdk::address::v1::derive_address_seed(seeds.as_slice(), &crate::ID);
+    let (address, address_seed) =
+        light_sdk::address::v1::derive_address(&seeds, merkle_tree_pubkey, &crate::ID);
+    let new_address_params = NewAddressParamsPacked {
+        seed: address_seed,
+        address_queue_account_index: 1,
+        address_merkle_tree_account_index: 2,
+        address_merkle_tree_root_index,
+    };
+    let program_id = crate::ID.into();
+    let output_merkle_tree_index = 2;
+    let claim_account = LightAccount::<'_, ClaimStatus>::new_init(
+        &program_id,
+        Some(address),
+        output_merkle_tree_index,
+    );
+
+    let cpi_inputs = light_sdk::cpi::CpiInputs::new_with_address(
+        validity_proof,
+        vec![claim_account.to_account_info().unwrap()],
+        vec![new_address_params],
+    );
+    let fee_payer = ctx.accounts.claimant.to_account_info();
+    let cpi_accounts =
+        light_sdk::cpi::CpiAccounts::new(&fee_payer, ctx.remaining_accounts, crate::ID).unwrap();
+
+    cpi_inputs
+        .invoke_light_system_program(cpi_accounts)
+        .unwrap();
 
     token::transfer(
         CpiContext::new(
