@@ -1,17 +1,11 @@
 use anchor_lang::{
-    context::Context, prelude::*, solana_program::hash::hashv, system_program::System, Accounts,
-    Key, Result,
+    context::Context, prelude::*, solana_program::hash::hashv, Accounts, Key, Result,
 };
-use anchor_spl::{
-    token,
-    token::{Token, TokenAccount},
-};
+use anchor_spl::token_interface::TokenAccount;
+use anchor_spl::{token, token::Token};
+
 use jito_merkle_verify::verify;
-use light_sdk::{
-    account::LightAccount, account_info::AccountInfoTrait, cpi::invoke_light_system_program,
-    light_compressed_account::instruction_data::with_account_info::CompressedAccountInfo,
-    NewAddressParams, NewAddressParamsPacked, ValidityProof,
-};
+use light_sdk::{account::LightAccount, NewAddressParamsPacked, ValidityProof};
 
 use crate::{
     error::ErrorCode,
@@ -33,19 +27,6 @@ pub struct NewClaim<'info> {
     #[account(mut)]
     pub distributor: Account<'info, MerkleDistributor>,
 
-    // /// Claim status PDA
-    // #[account(
-    //     init,
-    //     seeds = [
-    //         b"ClaimStatus".as_ref(),
-    //         claimant.key().to_bytes().as_ref(),
-    //         distributor.key().to_bytes().as_ref()
-    //     ],
-    //     bump,
-    //     space = ClaimStatus::LEN,
-    //     payer = claimant
-    // )]
-    // pub claim_status: Account<'info, ClaimStatus>,
     /// Distributor ATA containing the tokens to distribute.
     #[account(
         mut,
@@ -53,7 +34,7 @@ pub struct NewClaim<'info> {
         associated_token::authority = distributor.key(),
         address = distributor.token_vault
     )]
-    pub from: Account<'info, TokenAccount>,
+    pub from: InterfaceAccount<'info, TokenAccount>,
 
     /// Account to send the claimed tokens to.
     #[account(
@@ -61,7 +42,7 @@ pub struct NewClaim<'info> {
         token::mint=distributor.mint,
         token::authority = claimant.key()
     )]
-    pub to: Account<'info, TokenAccount>,
+    pub to: InterfaceAccount<'info, TokenAccount>,
 
     /// Who is claiming the tokens.
     #[account(mut, address = to.owner @ ErrorCode::OwnerMismatch)]
@@ -69,8 +50,6 @@ pub struct NewClaim<'info> {
 
     /// SPL [Token] program.
     pub token_program: Program<'info, Token>,
-    // /// The [System] program.
-    // pub system_program: Program<'info, System>,
 }
 
 /// Initializes a new claim from the [MerkleDistributor].
@@ -78,6 +57,7 @@ pub struct NewClaim<'info> {
 /// 2. Initializes claim_status
 /// 3. Transfers claim_status.unlocked_amount to the claimant
 /// 4. Increments total_amount_claimed by claim_status.unlocked_amount
+///
 /// CHECK:
 ///     1. The claim window has not expired and the distributor has not been clawed back
 ///     2. The claimant is the owner of the to account
@@ -124,40 +104,35 @@ pub fn handle_new_claim<'info>(
         ErrorCode::InvalidProof
     );
 
-    let claim_status = ClaimStatus {
-        claimant: claimant_account.key(),
-        locked_amount: amount_locked,
-        unlocked_amount: amount_unlocked,
-        locked_amount_withdrawn: 0,
-    };
-
-    let seeds = [
-        b"MerkleDistributor".as_ref(),
-        &distributor.mint.to_bytes(),
-        &distributor.version.to_le_bytes(),
-        &[ctx.accounts.distributor.bump],
+    let address_seeds = [
+        b"ClaimStatus".as_ref(),
+        &ctx.accounts.claimant.key().to_bytes(),
+        &ctx.accounts.distributor.key().to_bytes(),
     ];
-    let merkle_tree_pubkey = ctx.remaining_accounts[0].key;
-    // let seed = light_sdk::address::v1::derive_address_seed(seeds.as_slice(), &crate::ID);
+    let merkle_tree_pubkey = ctx.remaining_accounts[8].key;
     let (address, address_seed) =
-        light_sdk::address::v1::derive_address(&seeds, merkle_tree_pubkey, &crate::ID);
+        light_sdk::address::v1::derive_address(&address_seeds, merkle_tree_pubkey, &crate::ID);
     let new_address_params = NewAddressParamsPacked {
         seed: address_seed,
+        address_merkle_tree_account_index: 0,
         address_queue_account_index: 1,
-        address_merkle_tree_account_index: 2,
         address_merkle_tree_root_index,
     };
     let program_id = crate::ID.into();
     let output_merkle_tree_index = 2;
-    let claim_account = LightAccount::<'_, ClaimStatus>::new_init(
+    let mut claim_status = LightAccount::<'_, ClaimStatus>::new_init(
         &program_id,
         Some(address),
         output_merkle_tree_index,
     );
+    claim_status.claimant = ctx.accounts.claimant.key();
+    claim_status.locked_amount = amount_locked;
+    claim_status.unlocked_amount = amount_unlocked;
+    claim_status.locked_amount_withdrawn = 0;
 
     let cpi_inputs = light_sdk::cpi::CpiInputs::new_with_address(
         validity_proof,
-        vec![claim_account.to_account_info().unwrap()],
+        vec![claim_status.to_account_info().unwrap()],
         vec![new_address_params],
     );
     let fee_payer = ctx.accounts.claimant.to_account_info();
@@ -167,6 +142,13 @@ pub fn handle_new_claim<'info>(
     cpi_inputs
         .invoke_light_system_program(cpi_accounts)
         .unwrap();
+
+    let seeds = [
+        b"MerkleDistributor".as_ref(),
+        &distributor.mint.to_bytes(),
+        &distributor.version.to_le_bytes(),
+        &[ctx.accounts.distributor.bump],
+    ];
 
     token::transfer(
         CpiContext::new(
@@ -178,13 +160,13 @@ pub fn handle_new_claim<'info>(
             },
         )
         .with_signer(&[&seeds[..]]),
-        claim_status.unlocked_amount,
+        amount_unlocked,
     )?;
 
     let distributor = &mut ctx.accounts.distributor;
     distributor.total_amount_claimed = distributor
         .total_amount_claimed
-        .checked_add(claim_status.unlocked_amount)
+        .checked_add(amount_unlocked)
         .ok_or(ErrorCode::ArithmeticError)?;
 
     require!(
@@ -195,8 +177,8 @@ pub fn handle_new_claim<'info>(
     // Note: might get truncated, do not rely on
     msg!(
         "Created new claim with locked {} and {} unlocked with lockup start:{} end:{}",
-        claim_status.locked_amount,
-        claim_status.unlocked_amount,
+        amount_locked,
+        amount_unlocked,
         distributor.start_ts,
         distributor.end_ts,
     );

@@ -4,7 +4,7 @@ use anchor_lang::{
     prelude::*,
     Accounts, Result, ToAccountInfo,
 };
-use anchor_spl::token::TokenAccount;
+use anchor_spl::token_interface::TokenAccount;
 
 use crate::{error::ErrorCode, state::merkle_distributor::MerkleDistributor};
 
@@ -17,7 +17,7 @@ pub struct SetClawbackReceiver<'info> {
 
     /// New clawback account
     #[account(token::mint=distributor.mint)]
-    pub new_clawback_account: Account<'info, TokenAccount>,
+    pub new_clawback_account: InterfaceAccount<'info, TokenAccount>,
 
     /// Admin signer
     #[account(mut, address = distributor.admin @ ErrorCode::Unauthorized)]

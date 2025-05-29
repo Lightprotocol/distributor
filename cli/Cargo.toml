@@ -8,8 +8,14 @@ anchor-lang = { workspace = true }
 anchor-spl = { workspace = true }
 clap = { workspace = true }
 jito-merkle-tree = { path = "../merkle-tree" }
-merkle-distributor = { path = "../programs/merkle-distributor" }
+merkle-distributor = { path = "../programs/merkle-distributor", features = [
+    "cpi",
+] }
 solana-program = { workspace = true }
 solana-rpc-client = { workspace = true }
 solana-sdk = { workspace = true }
 spl-associated-token-account = { workspace = true }
+light-client = { workspace = true }
+light-sdk = { workspace = true }
+tokio = { workspace = true }
+base64 = { workspace = true }

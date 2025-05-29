@@ -5,8 +5,9 @@ use crate::error::ErrorCode::ArithmeticError;
 
 /// Holds whether or not a claimant has claimed tokens.
 #[account]
-#[derive(Default, LightHasher, LightDiscriminator)]
+#[derive(Default, Debug, LightHasher, LightDiscriminator)]
 pub struct ClaimStatus {
+    #[hash]
     /// Authority that claimed the tokens.
     pub claimant: Pubkey,
     /// Locked amount

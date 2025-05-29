@@ -1,7 +1,9 @@
-use anchor_lang::{account, context::Context, prelude::*, Accounts, Key, ToAccountInfo};
+use anchor_lang::{
+    account, context::Context, prelude::*, Accounts, Discriminator, Key, ToAccountInfo,
+};
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token::{Mint, Token, TokenAccount},
+    token_interface::{Mint, TokenAccount, TokenInterface},
 };
 
 use crate::{error::ErrorCode, state::merkle_distributor::MerkleDistributor};
@@ -30,10 +32,10 @@ pub struct NewDistributor<'info> {
 
     /// Clawback receiver token account
     #[account(mut, token::mint = mint)]
-    pub clawback_receiver: Account<'info, TokenAccount>,
+    pub clawback_receiver: InterfaceAccount<'info, TokenAccount>,
 
     /// The mint to distribute.
-    pub mint: Account<'info, Mint>,
+    pub mint: InterfaceAccount<'info, Mint>,
 
     /// Token vault
     #[account(
@@ -42,7 +44,7 @@ pub struct NewDistributor<'info> {
         associated_token::authority=distributor,
         payer = admin,
     )]
-    pub token_vault: Account<'info, TokenAccount>,
+    pub token_vault: InterfaceAccount<'info, TokenAccount>,
 
     /// Admin wallet, responsible for creating the distributor and paying for the transaction.
     /// Also has the authority to set the clawback receiver and change itself.
@@ -56,7 +58,7 @@ pub struct NewDistributor<'info> {
     pub associated_token_program: Program<'info, AssociatedToken>,
 
     /// The [Token] program.
-    pub token_program: Program<'info, Token>,
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 /// Creates a new [MerkleDistributor].
@@ -107,7 +109,7 @@ pub fn handle_new_distributor(
 
     let distributor = &mut ctx.accounts.distributor;
 
-    distributor.bump = *ctx.bumps.get("distributor").unwrap();
+    distributor.bump = ctx.bumps.distributor;
     distributor.version = version;
     distributor.root = root;
     distributor.mint = ctx.accounts.mint.key();
