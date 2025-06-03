@@ -3,7 +3,7 @@ use jito_merkle_tree::{
     airdrop_merkle_tree::AirdropMerkleTree,
     utils::{get_claim_status_pda, get_merkle_distributor_pda},
 };
-
+use light_client::indexer::{IndexerRpcConfig, RetryConfig};
 use light_program_test::{
     program_test::LightProgramTest, AddressWithTree, Indexer, ProgramTestConfig, RpcConnection,
 };
@@ -22,135 +22,6 @@ use solana_sdk::{
     system_program,
     transaction::Transaction,
 };
-
-async fn send_transaction(
-    rpc: &mut LightProgramTest,
-    instructions: &[solana_program::instruction::Instruction],
-    signers: &[&Keypair],
-) -> Result<(), Box<dyn std::error::Error>> {
-    let (blockhash, _) = rpc.get_latest_blockhash().await?;
-    let transaction = Transaction::new_signed_with_payer(
-        instructions,
-        Some(&signers[0].pubkey()),
-        signers,
-        blockhash,
-    );
-    rpc.process_transaction(transaction).await?;
-    Ok(())
-}
-
-fn create_distributor_instruction(
-    program_id: &solana_sdk::pubkey::Pubkey,
-    distributor_pda: &solana_sdk::pubkey::Pubkey,
-    admin: &solana_sdk::pubkey::Pubkey,
-    mint: &solana_sdk::pubkey::Pubkey,
-    token_vault: &solana_sdk::pubkey::Pubkey,
-    clawback_receiver: &solana_sdk::pubkey::Pubkey,
-    merkle_tree: &AirdropMerkleTree,
-    start_vesting_ts: i64,
-    end_vesting_ts: i64,
-    clawback_start_ts: i64,
-) -> solana_program::instruction::Instruction {
-    use anchor_lang::{InstructionData, ToAccountMetas};
-
-    solana_program::instruction::Instruction {
-        program_id: *program_id,
-        accounts: merkle_distributor::accounts::NewDistributor {
-            distributor: *distributor_pda,
-            admin: *admin,
-            mint: *mint,
-            token_vault: *token_vault,
-            clawback_receiver: *clawback_receiver,
-            system_program: system_program::id(),
-            token_program: spl_token::id(),
-            associated_token_program: spl_associated_token_account::id(),
-        }
-        .to_account_metas(None),
-        data: merkle_distributor::instruction::NewDistributor {
-            version: 0,
-            root: merkle_tree.merkle_root,
-            max_total_claim: merkle_tree.max_total_claim,
-            max_num_nodes: merkle_tree.max_num_nodes,
-            start_vesting_ts,
-            end_vesting_ts,
-            clawback_start_ts,
-        }
-        .data(),
-    }
-}
-
-fn create_new_claim_instruction(
-    program_id: &solana_sdk::pubkey::Pubkey,
-    distributor_pda: &solana_sdk::pubkey::Pubkey,
-    from: &solana_sdk::pubkey::Pubkey,
-    to: &solana_sdk::pubkey::Pubkey,
-    claimant: &solana_sdk::pubkey::Pubkey,
-    packed_account_metas: Vec<solana_program::instruction::AccountMeta>,
-    claimant_node: &jito_merkle_tree::tree_node::TreeNode,
-    validity_proof: light_sdk::ValidityProof,
-    address_merkle_tree_root_index: u16,
-) -> solana_program::instruction::Instruction {
-    use anchor_lang::{InstructionData, ToAccountMetas};
-
-    solana_program::instruction::Instruction {
-        program_id: *program_id,
-        accounts: [
-            merkle_distributor::accounts::NewClaim {
-                distributor: *distributor_pda,
-                from: *from,
-                to: *to,
-                claimant: *claimant,
-                token_program: spl_token::id(),
-            }
-            .to_account_metas(None),
-            packed_account_metas,
-        ]
-        .concat(),
-        data: merkle_distributor::instruction::NewClaim {
-            amount_unlocked: claimant_node.amount_unlocked(),
-            amount_locked: claimant_node.amount_locked(),
-            proof: claimant_node.proof.clone().expect("proof not found"),
-            validity_proof,
-            address_merkle_tree_root_index,
-        }
-        .data(),
-    }
-}
-
-/// Create test data and merkle tree without CSV files
-fn create_test_merkle_tree() -> (AirdropMerkleTree, Vec<Keypair>) {
-    use jito_merkle_tree::tree_node::TreeNode;
-
-    // Create test keypairs
-    let test_keypairs = vec![Keypair::new(), Keypair::new()];
-
-    // Create tree nodes directly
-    let tree_nodes = vec![
-        TreeNode {
-            claimant: test_keypairs[0].pubkey(),
-            total_unlocked_staker: 1000,
-            total_locked_staker: 500,
-            total_unlocked_searcher: 0,
-            total_locked_searcher: 0,
-            total_unlocked_validator: 0,
-            total_locked_validator: 0,
-            proof: None, // Will be set by AirdropMerkleTree::new
-        },
-        TreeNode {
-            claimant: test_keypairs[1].pubkey(),
-            total_unlocked_staker: 0,
-            total_locked_staker: 0,
-            total_unlocked_searcher: 0,
-            total_locked_searcher: 0,
-            total_unlocked_validator: 2000,
-            total_locked_validator: 1000,
-            proof: None, // Will be set by AirdropMerkleTree::new
-        },
-    ];
-
-    let merkle_tree = AirdropMerkleTree::new(tree_nodes).expect("Failed to create merkle tree");
-    (merkle_tree, test_keypairs)
-}
 
 #[test]
 fn test_merkle_tree_creation() {
@@ -401,10 +272,18 @@ async fn test_distributor_integration_with_light_program_test() {
     send_transaction(&mut rpc, &[new_claim_ix], &[&payer, claimant_keypair])
         .await
         .unwrap();
+    let slot = rpc.get_slot().await.unwrap();
 
     // Verify claim was created - check that compressed account exists
     let claim_status_account = rpc
-        .get_compressed_account(Some(claim_status_address), None, None)
+        .get_compressed_account(
+            Some(claim_status_address),
+            None,
+            Some(IndexerRpcConfig {
+                slot,
+                retry_config: RetryConfig::default(),
+            }),
+        )
         .await
         .unwrap()
         .value;
@@ -462,4 +341,133 @@ fn test_merkle_proof_verification() {
     }
 
     println!("✅ Merkle proof verification test completed successfully!");
+}
+
+async fn send_transaction(
+    rpc: &mut LightProgramTest,
+    instructions: &[solana_program::instruction::Instruction],
+    signers: &[&Keypair],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (blockhash, _) = rpc.get_latest_blockhash().await?;
+    let transaction = Transaction::new_signed_with_payer(
+        instructions,
+        Some(&signers[0].pubkey()),
+        signers,
+        blockhash,
+    );
+    rpc.process_transaction(transaction).await?;
+    Ok(())
+}
+
+fn create_distributor_instruction(
+    program_id: &solana_sdk::pubkey::Pubkey,
+    distributor_pda: &solana_sdk::pubkey::Pubkey,
+    admin: &solana_sdk::pubkey::Pubkey,
+    mint: &solana_sdk::pubkey::Pubkey,
+    token_vault: &solana_sdk::pubkey::Pubkey,
+    clawback_receiver: &solana_sdk::pubkey::Pubkey,
+    merkle_tree: &AirdropMerkleTree,
+    start_vesting_ts: i64,
+    end_vesting_ts: i64,
+    clawback_start_ts: i64,
+) -> solana_program::instruction::Instruction {
+    use anchor_lang::{InstructionData, ToAccountMetas};
+
+    solana_program::instruction::Instruction {
+        program_id: *program_id,
+        accounts: merkle_distributor::accounts::NewDistributor {
+            distributor: *distributor_pda,
+            admin: *admin,
+            mint: *mint,
+            token_vault: *token_vault,
+            clawback_receiver: *clawback_receiver,
+            system_program: system_program::id(),
+            token_program: spl_token::id(),
+            associated_token_program: spl_associated_token_account::id(),
+        }
+        .to_account_metas(None),
+        data: merkle_distributor::instruction::NewDistributor {
+            version: 0,
+            root: merkle_tree.merkle_root,
+            max_total_claim: merkle_tree.max_total_claim,
+            max_num_nodes: merkle_tree.max_num_nodes,
+            start_vesting_ts,
+            end_vesting_ts,
+            clawback_start_ts,
+        }
+        .data(),
+    }
+}
+
+fn create_new_claim_instruction(
+    program_id: &solana_sdk::pubkey::Pubkey,
+    distributor_pda: &solana_sdk::pubkey::Pubkey,
+    from: &solana_sdk::pubkey::Pubkey,
+    to: &solana_sdk::pubkey::Pubkey,
+    claimant: &solana_sdk::pubkey::Pubkey,
+    packed_account_metas: Vec<solana_program::instruction::AccountMeta>,
+    claimant_node: &jito_merkle_tree::tree_node::TreeNode,
+    validity_proof: light_sdk::ValidityProof,
+    address_merkle_tree_root_index: u16,
+) -> solana_program::instruction::Instruction {
+    use anchor_lang::{InstructionData, ToAccountMetas};
+
+    solana_program::instruction::Instruction {
+        program_id: *program_id,
+        accounts: [
+            merkle_distributor::accounts::NewClaim {
+                distributor: *distributor_pda,
+                from: *from,
+                to: *to,
+                claimant: *claimant,
+                token_program: spl_token::id(),
+            }
+            .to_account_metas(None),
+            packed_account_metas,
+        ]
+        .concat(),
+        data: merkle_distributor::instruction::NewClaim {
+            amount_unlocked: claimant_node.amount_unlocked(),
+            amount_locked: claimant_node.amount_locked(),
+            proof: claimant_node.proof.clone().expect("proof not found"),
+            validity_proof,
+            address_merkle_tree_root_index,
+        }
+        .data(),
+    }
+}
+
+/// Create test data and merkle tree without CSV files
+fn create_test_merkle_tree() -> (AirdropMerkleTree, Vec<Keypair>) {
+    use jito_merkle_tree::tree_node::TreeNode;
+
+    // Create test keypairs
+    let test_keypairs = vec![Keypair::new(), Keypair::new()];
+
+    // Create tree nodes directly
+    let tree_nodes = vec![
+        TreeNode {
+            claimant: test_keypairs[0].pubkey(),
+            total_unlocked_staker: 1000,
+            total_locked_staker: 500,
+            total_unlocked_searcher: 0,
+            total_locked_searcher: 0,
+            total_unlocked_validator: 0,
+            total_locked_validator: 0,
+            proof: None, // Will be set by AirdropMerkleTree::new
+        },
+        TreeNode {
+            claimant: test_keypairs[1].pubkey(),
+            total_unlocked_staker: 0,
+            total_locked_staker: 0,
+            total_unlocked_searcher: 0,
+            total_locked_searcher: 0,
+            total_unlocked_validator: 2000,
+            total_locked_validator: 1000,
+            proof: None, // Will be set by AirdropMerkleTree::new
+        },
+    ];
+
+    let merkle_tree = AirdropMerkleTree::new(tree_nodes).expect("Failed to create merkle tree");
+    (merkle_tree, test_keypairs)
 }

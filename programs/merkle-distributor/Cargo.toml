@@ -38,6 +38,7 @@ spl-associated-token-account = { workspace = true }
 spl-token = "7"
 tokio = { workspace = true }
 hex = "0.4"
+light-client = { workspace = true }
 
 [lints.rust.unexpected_cfgs]
 level = "allow"

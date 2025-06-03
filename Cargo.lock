@@ -3452,6 +3452,7 @@ dependencies = [
  "hex",
  "jito-merkle-tree",
  "jito-merkle-verify",
+ "light-client",
  "light-hasher",
  "light-program-test",
  "light-sdk",
