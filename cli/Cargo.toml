@@ -3,6 +3,9 @@ name = "jito-scripts"
 version = { workspace = true }
 edition = { workspace = true }
 
+[features]
+test-sbf = []
+
 [dependencies]
 anchor-lang = { workspace = true }
 anchor-spl = { workspace = true }
@@ -19,3 +22,7 @@ light-client = { workspace = true }
 light-sdk = { workspace = true }
 tokio = { workspace = true }
 base64 = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.0"
+chrono = "0.4"

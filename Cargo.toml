@@ -21,7 +21,10 @@ edition = "2021"
 publish = false
 
 [workspace.dependencies]
+
 anchor-lang = "0.31.1"
+
+
 anchor-spl = "0.31.1"
 axum = "0.6.2"
 bytemuck = "1.14.0"
@@ -36,11 +39,11 @@ serde = "1.0.137"
 serde_derive = "1.0.171"
 serde_json = "1.0.102"
 serde_yaml = "0.9.25"
-solana-program = { version = "=2.2.1" }
-solana-rpc-client = { version = "=2.2.1" }
-solana-rpc-client-api = { version = "=2.2.1" }
+solana-program = { version = "2.2.1" }
+solana-rpc-client = { version = "2.2.1" }
+solana-rpc-client-api = { version = "2.2.1" }
 solana-security-txt = { version = "1.1.1" }
-solana-sdk = { version = "=2.2.1" }
+solana-sdk = { version = "2.2.1" }
 indexmap = "2.1.0"
 spl-associated-token-account = "7"
 static_assertions = "1.1"
@@ -61,7 +64,9 @@ tower-http = { version = "0.4.0", features = ["trace"] }
 tracing = { version = "0.1.37" }
 tracing-core = "0.1.32"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
-light-client = { path = "../light-protocol/sdk-libs/client", features = ["v2"] }
-light-sdk = { path = "../light-protocol/sdk-libs/sdk", features = ["v2"] }
-light-hasher = { path = "../light-protocol/program-libs/hasher" }
+light-client = { git = "https://github.com/lightprotocol/light-protocol.git", rev = "14c931480fd715eea0e712a2802460ddcab2224b" }
+light-hasher = { git = "https://github.com/lightprotocol/light-protocol.git", rev = "14c931480fd715eea0e712a2802460ddcab2224b" }
 base64 = "0.21.0"
+light-sdk = { git = "https://github.com/lightprotocol/light-protocol.git", rev = "14c931480fd715eea0e712a2802460ddcab2224b" }
+light-program-test = { git = "https://github.com/lightprotocol/light-protocol.git", rev = "14c931480fd715eea0e712a2802460ddcab2224b" }
+jito-merkle-tree = { path = "./merkle-tree" }

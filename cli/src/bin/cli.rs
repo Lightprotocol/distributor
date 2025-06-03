@@ -1,7 +1,7 @@
 extern crate jito_merkle_tree;
 extern crate merkle_distributor;
 
-use std::{path::PathBuf, str::FromStr};
+use std::path::PathBuf;
 
 use anchor_lang::{
     prelude::Pubkey, pubkey, AccountDeserialize, AnchorDeserialize, InstructionData, Key,
@@ -14,20 +14,16 @@ use jito_merkle_tree::{
     utils::{get_claim_status_pda, get_merkle_distributor_pda},
 };
 use light_client::{
-    indexer::{AddressWithTree, Indexer, StateMerkleTreeAccounts},
+    indexer::{AddressWithTree, Indexer, IndexerRpcConfig, RetryConfig},
     rpc::{rpc_connection::RpcConnectionConfig, RpcConnection, SolanaRpcConnection},
 };
-use light_sdk::{
-    instruction::{
-        account_meta::CompressedAccountMeta,
-        accounts::SystemAccountMetaConfig,
-        merkle_context::{
-            pack_address_merkle_context, pack_merkle_context, AddressMerkleContext, MerkleContext,
-        },
-        pack_accounts::PackedAccounts,
+use light_sdk::instruction::{
+    account_meta::CompressedAccountMeta,
+    accounts::SystemAccountMetaConfig,
+    merkle_context::{
+        pack_address_merkle_context, pack_merkle_context, AddressMerkleContext, MerkleContext,
     },
-    light_compressed_account::TreeType,
-    Poseidon,
+    pack_accounts::PackedAccounts,
 };
 use merkle_distributor::state::{claim_status::ClaimStatus, merkle_distributor::MerkleDistributor};
 use solana_program::instruction::Instruction;
@@ -202,9 +198,11 @@ async fn process_new_claim(args: &Args, claim_args: &ClaimArgs) {
                 address: claim_status_address,
                 tree: V1_ADDRESS_MERKLE_TREE,
             }],
+            None,
         )
         .await
-        .expect("failed to get validity proof");
+        .expect("failed to get validity proof")
+        .value;
     let address_merkle_context = AddressMerkleContext {
         address_queue_pubkey: V1_ADDRESS_QUEUE,
         address_merkle_tree_pubkey: V1_ADDRESS_MERKLE_TREE,
@@ -217,14 +215,10 @@ async fn process_new_claim(args: &Args, claim_args: &ClaimArgs) {
     pack_address_merkle_context(
         &address_merkle_context,
         &mut packed_accounts,
-        proof.address_root_indices[0],
+        proof.addresses[0].root_index,
     );
 
     packed_accounts.insert_or_get(V1_MERKLE_TREE_PUBKEY);
-
-    // let account = client
-    //     .get_compressed_account(Some(claim_status_address), None)
-    //     .await;
 
     match client.get_account(claimant_ata).await {
         Ok(_) => {}
@@ -270,8 +264,8 @@ async fn process_new_claim(args: &Args, claim_args: &ClaimArgs) {
             amount_unlocked: node.amount_unlocked(),
             amount_locked: node.amount_locked(),
             proof: node.proof.expect("proof not found"),
-            address_merkle_tree_root_index: proof.address_root_indices[0],
-            validity_proof: proof.proof.into(),
+            address_merkle_tree_root_index: proof.addresses[0].root_index,
+            validity_proof: proof.proof,
         }
         .data(),
     };
@@ -295,7 +289,7 @@ async fn process_claim(args: &Args, claim_args: &ClaimArgs) {
 
     let priority_fee = args.priority.unwrap_or(0);
 
-    let (distributor, bump) =
+    let (distributor, _bump) =
         get_merkle_distributor_pda(&args.program_id, &args.mint, args.airdrop_version);
     println!("distributor pubkey {}", distributor);
 
@@ -311,7 +305,7 @@ async fn process_claim(args: &Args, claim_args: &ClaimArgs) {
     let mut client = SolanaRpcConnection::new(config);
 
     let claim_status_compressed_account = match client
-        .get_compressed_account(Some(claim_status_address), None)
+        .get_compressed_account(Some(claim_status_address), None, None)
         .await
     {
         Ok(compressed_account) => compressed_account,
@@ -323,103 +317,25 @@ async fn process_claim(args: &Args, claim_args: &ClaimArgs) {
             } else {
                 panic!("error getting PDA: {e}")
             }
+            let slot = client.get_slot().await.unwrap();
             // TODO: wait for indexer to catch up
             client
-                .get_compressed_account(Some(claim_status_address), None)
+                .get_compressed_account(
+                    Some(claim_status_address),
+                    None,
+                    Some(IndexerRpcConfig {
+                        slot,
+                        retry_config: RetryConfig::default(),
+                    }),
+                )
                 .await
                 .expect("Fetching account failed.")
         }
     };
-    let mut by_owner = client
-        .get_compressed_accounts_by_owner(&merkle_distributor::ID)
-        .await
-        .expect("Fetching account failed.");
-    by_owner[0]
-        .compressed_account
-        .data
-        .as_mut()
-        .unwrap()
-        .discriminator = [144, 240, 8, 28, 159, 72, 157, 125];
-    println!("by_owner {by_owner:?}");
-    println!(
-        "claim_status_compressed_account {:?}",
-        claim_status_compressed_account
-    );
-    let data_hash = bs58::decode(
-        claim_status_compressed_account
-            .data
-            .as_ref()
-            .unwrap()
-            .data_hash
-            .clone(),
-    )
-    .into_vec()
-    .unwrap();
-    println!("decoded data_hash {:?}", data_hash);
-    let hash = bs58::decode(claim_status_compressed_account.hash.clone())
-        .into_vec()
-        .unwrap();
-    println!("decoded hash {:?}", hash);
-    let address = bs58::decode(claim_status_compressed_account.address.as_ref().unwrap())
-        .into_vec()
-        .unwrap();
-    println!("decoded address {:?}", address);
-    println!(
-        "by owner address {:?}",
-        by_owner[0].compressed_account.address
-    );
-    println!("offchain address {:?}", address);
-    println!("by owner {:?}", by_owner[0]);
-
-    println!("by owner hash {:?}", by_owner[0].hash().unwrap());
-    println!(
-        "by owner hash not batched {:?}",
-        by_owner[0]
-            .compressed_account
-            .hash(
-                &by_owner[0].merkle_context.merkle_tree_pubkey,
-                &by_owner[0].merkle_context.leaf_index,
-                false
-            )
-            .unwrap()
-    );
-    println!(
-        "by owner hash batched {:?}",
-        by_owner[0]
-            .compressed_account
-            .hash(&V1_MERKLE_TREE_PUBKEY, &1, true)
-            .unwrap()
-    );
-    println!(
-        "by owner data hash {:?}",
-        by_owner[0]
-            .compressed_account
-            .data
-            .as_ref()
-            .unwrap()
-            .data_hash
-    );
+    let claim_status_compressed_account = claim_status_compressed_account.value;
 
     let claim_status = ClaimStatus::deserialize(
-        &mut base64::decode(
-            claim_status_compressed_account
-                .data
-                .as_ref()
-                .unwrap()
-                .data
-                .clone()
-                .as_bytes(),
-        )
-        .expect("Claim status compressed account data deserialization failed")
-        .as_slice(),
-    )
-    .expect("Claim status compressed account data deserialization failed");
-
-    println!("des claim status {:?}", claim_status);
-
-    let claim_status = ClaimStatus::deserialize(
-        &mut by_owner[0]
-            .compressed_account
+        &mut claim_status_compressed_account
             .data
             .as_ref()
             .unwrap()
@@ -427,16 +343,6 @@ async fn process_claim(args: &Args, claim_args: &ClaimArgs) {
             .as_slice(),
     )
     .expect("Claim status compressed account data deserialization failed");
-    println!("des claim status {:?}", claim_status);
-
-    let claim_status_compressed_account = client
-        .get_compressed_account(None, Some(by_owner[0].hash().unwrap()))
-        .await
-        .expect("Fetching account failed.");
-    println!(
-        "claim_status_compressed_account by hash {:?}",
-        claim_status_compressed_account
-    );
 
     let validity_proof = client
         .get_validity_proof(
@@ -446,16 +352,18 @@ async fn process_claim(args: &Args, claim_args: &ClaimArgs) {
                 .try_into()
                 .unwrap()],
             vec![],
+            None,
         )
         .await
-        .expect("get validity proof failed");
+        .expect("get validity proof failed")
+        .value;
 
     let merkle_context = MerkleContext {
-        merkle_tree_pubkey: Pubkey::from_str(&claim_status_compressed_account.tree).unwrap(),
+        merkle_tree_pubkey: claim_status_compressed_account.merkle_context.tree,
         // TODO: add lookup table logic
-        queue_pubkey: Pubkey::from_str("nfq1NvQDJ2GEgnS8zt9prAe8rjjpAW1zFkrvZoBR148").unwrap(),
+        queue_pubkey: claim_status_compressed_account.merkle_context.queue,
         leaf_index: claim_status_compressed_account.leaf_index,
-        tree_type: TreeType::StateV1,
+        tree_type: claim_status_compressed_account.merkle_context.tree_type,
         prove_by_index: false,
     };
     let mut packed_accounts = PackedAccounts::new_with_system_accounts(
@@ -468,7 +376,7 @@ async fn process_claim(args: &Args, claim_args: &ClaimArgs) {
         address: claim_status_address,
         // TODO: make flexible
         output_merkle_tree_index: merkle_context.merkle_tree_pubkey_index,
-        root_index: Some(validity_proof.root_indices[0]),
+        root_index: validity_proof.accounts[0].root_index,
     };
 
     let claimant_ata = get_associated_token_address(&claimant, &args.mint);
@@ -493,7 +401,7 @@ async fn process_claim(args: &Args, claim_args: &ClaimArgs) {
         .concat(),
         data: merkle_distributor::instruction::ClaimLocked {
             claim_status,
-            validity_proof: validity_proof.proof.into(),
+            validity_proof: validity_proof.proof,
             input_account_meta,
         }
         .data(),
