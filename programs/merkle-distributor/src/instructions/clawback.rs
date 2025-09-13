@@ -1,10 +1,7 @@
 // Instruction to clawback funds once they have expired
 
 use anchor_lang::{context::Context, prelude::*, Accounts, Key, Result};
-use anchor_spl::{
-    token,
-    token::{Token, TokenAccount},
-};
+use anchor_spl::token_interface::{self, TokenAccount, TokenInterface};
 
 use crate::{error::ErrorCode, state::merkle_distributor::MerkleDistributor};
 
@@ -22,11 +19,11 @@ pub struct Clawback<'info> {
         associated_token::authority = distributor.key(),
         address = distributor.token_vault
     )]
-    pub from: Account<'info, TokenAccount>,
+    pub from: InterfaceAccount<'info, TokenAccount>,
 
     /// The Clawback token account.
     #[account(mut, address = distributor.clawback_receiver)]
-    pub to: Account<'info, TokenAccount>,
+    pub to: InterfaceAccount<'info, TokenAccount>,
 
     /// Claimant account
     /// Anyone can claw back the funds
@@ -36,13 +33,14 @@ pub struct Clawback<'info> {
     pub system_program: Program<'info, System>,
 
     /// SPL [Token] program.
-    pub token_program: Program<'info, Token>,
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 /// Claws back unclaimed tokens by:
 /// 1. Checking that the lockup has expired
 /// 2. Transferring remaining funds from the vault to the clawback receiver
 /// 3. Marking the distributor as clawed back
+///
 /// CHECK:
 ///     1. The distributor has not already been clawed back
 #[allow(clippy::result_large_err)]
@@ -64,10 +62,11 @@ pub fn handle_clawback(ctx: Context<Clawback>) -> Result<()> {
         &[ctx.accounts.distributor.bump],
     ];
 
-    token::transfer(
+    #[allow(deprecated)]
+    token_interface::transfer(
         CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
-            token::Transfer {
+            token_interface::Transfer {
                 from: ctx.accounts.from.to_account_info(),
                 to: ctx.accounts.to.to_account_info(),
                 authority: ctx.accounts.distributor.to_account_info(),

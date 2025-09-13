@@ -36,6 +36,8 @@ use tracing::{info, instrument, warn, Span};
 
 use crate::{error, error::ApiError, Result};
 
+pub const V1_ADDRESS_MERKLE_TREE: Pubkey = pubkey!("amt1Ayt45jfbdw5YSo7iz6WZxUmnZsQTYXy82hVwyC2");
+
 pub struct RouterState {
     pub distributor_pubkey: Pubkey, // Merkle Distributor PDA pubkey
     pub program_id: Pubkey,
@@ -120,8 +122,12 @@ async fn get_claim_status(
     node: &TreeNode,
     user_pubkey: &Pubkey,
 ) -> Result<ClaimStatus> {
-    let (claim_status_pda, _bump) =
-        get_claim_status_pda(&state.program_id, user_pubkey, &state.distributor_pubkey);
+    let (claim_status_pda, _) = get_claim_status_pda(
+        &state.program_id,
+        user_pubkey,
+        &state.distributor_pubkey,
+        &V1_ADDRESS_MERKLE_TREE,
+    );
 
     let mut accounts = state
         .rpc_client

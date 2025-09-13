@@ -44,15 +44,13 @@ pub fn get_claim_status_pda(
     program_id: &Pubkey,
     claimant: &Pubkey,
     distributor: &Pubkey,
-) -> (Pubkey, u8) {
-    Pubkey::find_program_address(
-        &[
-            b"ClaimStatus".as_ref(),
-            claimant.to_bytes().as_ref(),
-            distributor.to_bytes().as_ref(),
-        ],
-        program_id,
-    )
+    address_merkle_tree_pubkey: &Pubkey,
+) -> ([u8; 32], [u8; 32]) {
+    let c_bytes = claimant.to_bytes();
+    let d_bytes = distributor.to_bytes();
+    let seeds = [b"ClaimStatus".as_ref(), c_bytes.as_ref(), d_bytes.as_ref()];
+    println!("seeds {seeds:?}");
+    light_sdk::address::v1::derive_address(&seeds, address_merkle_tree_pubkey, program_id)
 }
 
 #[derive(Debug)]

@@ -3,24 +3,43 @@ extern crate merkle_distributor;
 
 use std::path::PathBuf;
 
-use anchor_lang::{prelude::Pubkey, AccountDeserialize, InstructionData, Key, ToAccountMetas};
+use anchor_lang::{
+    prelude::Pubkey, pubkey, AccountDeserialize, AnchorDeserialize, InstructionData, Key,
+    ToAccountMetas,
+};
 use anchor_spl::token;
 use clap::{Parser, Subcommand};
 use jito_merkle_tree::{
     airdrop_merkle_tree::AirdropMerkleTree,
     utils::{get_claim_status_pda, get_merkle_distributor_pda},
 };
-use merkle_distributor::state::merkle_distributor::MerkleDistributor;
+use light_client::{
+    indexer::{AddressWithTree, Indexer, IndexerRpcConfig, RetryConfig},
+    rpc::{rpc_connection::RpcConnectionConfig, RpcConnection, SolanaRpcConnection},
+};
+use light_sdk::instruction::{
+    account_meta::CompressedAccountMeta,
+    accounts::SystemAccountMetaConfig,
+    merkle_context::{
+        pack_address_merkle_context, pack_merkle_context, AddressMerkleContext, MerkleContext,
+    },
+    pack_accounts::PackedAccounts,
+};
+use merkle_distributor::state::{claim_status::ClaimStatus, merkle_distributor::MerkleDistributor};
 use solana_program::instruction::Instruction;
 use solana_rpc_client::rpc_client::RpcClient;
 use solana_sdk::{
-    account::Account, commitment_config::CommitmentConfig,
+    account::Account, bs58, commitment_config::CommitmentConfig,
     compute_budget::ComputeBudgetInstruction, signature::read_keypair_file, signer::Signer,
     transaction::Transaction,
 };
 use spl_associated_token_account::{
     get_associated_token_address, instruction::create_associated_token_account,
 };
+
+pub const V1_ADDRESS_MERKLE_TREE: Pubkey = pubkey!("amt1Ayt45jfbdw5YSo7iz6WZxUmnZsQTYXy82hVwyC2");
+pub const V1_ADDRESS_QUEUE: Pubkey = pubkey!("aq1S9z4reTSQAdgWHGD2zDaS39sjGrAxbR31vxJ2F4F");
+pub const V1_MERKLE_TREE_PUBKEY: Pubkey = pubkey!("smt1NamzXdq4AMqS2fS2F1i5KTYPZRhoHgWx38d8WsT");
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -123,7 +142,8 @@ pub struct SetAdminArgs {
     pub new_admin: Pubkey,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = Args::parse();
 
     match &args.command {
@@ -131,7 +151,7 @@ fn main() {
             process_new_distributor(&args, new_distributor_args);
         }
         Commands::Claim(claim_args) => {
-            process_claim(&args, claim_args);
+            process_claim(&args, claim_args).await;
         }
         Commands::Clawback(clawback_args) => process_clawback(&args, clawback_args),
         Commands::CreateMerkleTree(merkle_tree_args) => {
@@ -143,7 +163,7 @@ fn main() {
     }
 }
 
-fn process_new_claim(args: &Args, claim_args: &ClaimArgs) {
+async fn process_new_claim(args: &Args, claim_args: &ClaimArgs) {
     let keypair = read_keypair_file(&args.keypair_path).expect("Failed reading keypair file");
     let claimant = keypair.pubkey();
     println!("Claiming tokens for user {}...", claimant);
@@ -156,16 +176,51 @@ fn process_new_claim(args: &Args, claim_args: &ClaimArgs) {
 
     // Get user's node in claim
     let node = merkle_tree.get_node(&claimant);
+    let (claim_status_address, _address_seed) = get_claim_status_pda(
+        &args.program_id,
+        &claimant,
+        &distributor,
+        &V1_ADDRESS_MERKLE_TREE,
+    );
+    println!("address {:?}", claim_status_address);
+    println!("_address_seed {:?}", _address_seed);
 
-    let (claim_status_pda, _bump) = get_claim_status_pda(&args.program_id, &claimant, &distributor);
-
-    let client = RpcClient::new_with_commitment(&args.rpc_url, CommitmentConfig::confirmed());
+    let config = RpcConnectionConfig::new(args.rpc_url.to_string());
+    let mut client = SolanaRpcConnection::new(config);
 
     let claimant_ata = get_associated_token_address(&claimant, &args.mint);
 
-    let mut ixs = vec![];
+    let mut ixs = vec![ComputeBudgetInstruction::set_compute_unit_limit(400_000)];
+    let proof = client
+        .get_validity_proof(
+            vec![],
+            vec![AddressWithTree {
+                address: claim_status_address,
+                tree: V1_ADDRESS_MERKLE_TREE,
+            }],
+            None,
+        )
+        .await
+        .expect("failed to get validity proof")
+        .value;
+    let address_merkle_context = AddressMerkleContext {
+        address_queue_pubkey: V1_ADDRESS_QUEUE,
+        address_merkle_tree_pubkey: V1_ADDRESS_MERKLE_TREE,
+    };
 
-    match client.get_account(&claimant_ata) {
+    println!("proof {:?}", proof);
+    let mut packed_accounts = PackedAccounts::new_with_system_accounts(
+        SystemAccountMetaConfig::new(merkle_distributor::ID),
+    );
+    pack_address_merkle_context(
+        &address_merkle_context,
+        &mut packed_accounts,
+        proof.addresses[0].root_index,
+    );
+
+    packed_accounts.insert_or_get(V1_MERKLE_TREE_PUBKEY);
+
+    match client.get_account(claimant_ata).await {
         Ok(_) => {}
         Err(e) => {
             // TODO: directly pattern match on error kind
@@ -179,83 +234,177 @@ fn process_new_claim(args: &Args, claim_args: &ClaimArgs) {
             }
         }
     }
-
+    let (packed_account_metas, _, packed_accounts_start_offset) =
+        packed_accounts.to_account_metas();
+    println!(
+        "packed_accounts_start_offset {}",
+        packed_accounts_start_offset
+    );
+    println!(
+        "get_associated_token_address(&distributor, &args.mint) {}",
+        get_associated_token_address(&distributor, &args.mint)
+    );
     let new_claim_ix = Instruction {
         program_id: args.program_id,
-        accounts: merkle_distributor::accounts::NewClaim {
-            distributor,
-            claim_status: claim_status_pda,
-            from: get_associated_token_address(&distributor, &args.mint),
-            to: claimant_ata,
-            claimant,
-            token_program: token::ID,
-            system_program: solana_program::system_program::ID,
-        }
-        .to_account_metas(None),
+        accounts: [
+            merkle_distributor::accounts::NewClaim {
+                distributor,
+                // claim_status: claim_status_pda,
+                from: get_associated_token_address(&distributor, &args.mint),
+                to: claimant_ata,
+                claimant,
+                token_program: token::ID,
+                // system_program: solana_program::system_program::ID,
+            }
+            .to_account_metas(None),
+            packed_account_metas,
+        ]
+        .concat(),
         data: merkle_distributor::instruction::NewClaim {
             amount_unlocked: node.amount_unlocked(),
             amount_locked: node.amount_locked(),
             proof: node.proof.expect("proof not found"),
+            address_merkle_tree_root_index: proof.addresses[0].root_index,
+            validity_proof: proof.proof,
         }
         .data(),
     };
 
     ixs.push(new_claim_ix);
 
-    let blockhash = client.get_latest_blockhash().unwrap();
+    let blockhash = client.get_latest_blockhash().await.unwrap().0;
     let tx =
         Transaction::new_signed_with_payer(&ixs, Some(&claimant.key()), &[&keypair], blockhash);
 
     let signature = client
+        .client
         .send_and_confirm_transaction_with_spinner(&tx)
         .unwrap();
     println!("successfully created new claim with signature {signature:#?}");
 }
 
-fn process_claim(args: &Args, claim_args: &ClaimArgs) {
+async fn process_claim(args: &Args, claim_args: &ClaimArgs) {
     let keypair = read_keypair_file(&args.keypair_path).expect("Failed reading keypair file");
     let claimant = keypair.pubkey();
 
     let priority_fee = args.priority.unwrap_or(0);
 
-    let (distributor, bump) =
+    let (distributor, _bump) =
         get_merkle_distributor_pda(&args.program_id, &args.mint, args.airdrop_version);
     println!("distributor pubkey {}", distributor);
 
-    let (claim_status_pda, _bump) = get_claim_status_pda(&args.program_id, &claimant, &distributor);
-    println!("claim pda: {claim_status_pda}, bump: {bump}");
+    let (claim_status_address, _address_seed) = get_claim_status_pda(
+        &args.program_id,
+        &claimant,
+        &distributor,
+        &V1_ADDRESS_MERKLE_TREE,
+    );
+    println!("claim pda: {claim_status_address:?}, bump: {_address_seed:?}");
 
-    let client = RpcClient::new_with_commitment(&args.rpc_url, CommitmentConfig::confirmed());
+    let config = RpcConnectionConfig::new(args.rpc_url.to_string());
+    let mut client = SolanaRpcConnection::new(config);
 
-    match client.get_account(&claim_status_pda) {
-        Ok(_) => {}
+    let claim_status_compressed_account = match client
+        .get_compressed_account(Some(claim_status_address), None, None)
+        .await
+    {
+        Ok(compressed_account) => compressed_account,
         Err(e) => {
             // TODO: match on the error kind
-            if e.to_string().contains("AccountNotFound") {
+            if e.to_string().contains("Account not found") {
                 println!("PDA does not exist. creating.");
-                process_new_claim(args, claim_args);
+                process_new_claim(args, claim_args).await;
             } else {
                 panic!("error getting PDA: {e}")
             }
+            let slot = client.get_slot().await.unwrap();
+            // TODO: wait for indexer to catch up
+            client
+                .get_compressed_account(
+                    Some(claim_status_address),
+                    None,
+                    Some(IndexerRpcConfig {
+                        slot,
+                        retry_config: RetryConfig::default(),
+                    }),
+                )
+                .await
+                .expect("Fetching account failed.")
         }
-    }
+    };
+    let claim_status_compressed_account = claim_status_compressed_account.value;
+
+    let claim_status = ClaimStatus::deserialize(
+        &mut claim_status_compressed_account
+            .data
+            .as_ref()
+            .unwrap()
+            .data
+            .as_slice(),
+    )
+    .expect("Claim status compressed account data deserialization failed");
+
+    let validity_proof = client
+        .get_validity_proof(
+            vec![bs58::decode(claim_status_compressed_account.hash)
+                .into_vec()
+                .unwrap()
+                .try_into()
+                .unwrap()],
+            vec![],
+            None,
+        )
+        .await
+        .expect("get validity proof failed")
+        .value;
+
+    let merkle_context = MerkleContext {
+        merkle_tree_pubkey: claim_status_compressed_account.merkle_context.tree,
+        // TODO: add lookup table logic
+        queue_pubkey: claim_status_compressed_account.merkle_context.queue,
+        leaf_index: claim_status_compressed_account.leaf_index,
+        tree_type: claim_status_compressed_account.merkle_context.tree_type,
+        prove_by_index: false,
+    };
+    let mut packed_accounts = PackedAccounts::new_with_system_accounts(
+        SystemAccountMetaConfig::new(merkle_distributor::ID),
+    );
+    let merkle_context = pack_merkle_context(&merkle_context, &mut packed_accounts);
+
+    let input_account_meta = CompressedAccountMeta {
+        merkle_context,
+        address: claim_status_address,
+        // TODO: make flexible
+        output_merkle_tree_index: merkle_context.merkle_tree_pubkey_index,
+        root_index: validity_proof.accounts[0].root_index,
+    };
 
     let claimant_ata = get_associated_token_address(&claimant, &args.mint);
 
-    let mut ixs = vec![];
+    let mut ixs = vec![ComputeBudgetInstruction::set_compute_unit_limit(500_000)];
+
+    let (packed_account_metas, _, _) = packed_accounts.to_account_metas();
 
     let claim_ix = Instruction {
         program_id: args.program_id,
-        accounts: merkle_distributor::accounts::ClaimLocked {
-            distributor,
-            claim_status: claim_status_pda,
-            from: get_associated_token_address(&distributor, &args.mint),
-            to: claimant_ata,
-            claimant,
-            token_program: token::ID,
+        accounts: [
+            merkle_distributor::accounts::ClaimLocked {
+                distributor,
+                from: get_associated_token_address(&distributor, &args.mint),
+                to: claimant_ata,
+                claimant,
+                token_program: token::ID,
+            }
+            .to_account_metas(None),
+            packed_account_metas,
+        ]
+        .concat(),
+        data: merkle_distributor::instruction::ClaimLocked {
+            claim_status,
+            validity_proof: validity_proof.proof,
+            input_account_meta,
         }
-        .to_account_metas(None),
-        data: merkle_distributor::instruction::ClaimLocked {}.data(),
+        .data(),
     };
     ixs.push(claim_ix);
 
@@ -270,11 +419,12 @@ fn process_claim(args: &Args, claim_args: &ClaimArgs) {
         println!("No priority fee added. Add one with --priority <microlamports u64>");
     }
 
-    let blockhash = client.get_latest_blockhash().unwrap();
+    let (blockhash, _) = client.get_latest_blockhash().await.unwrap();
     let tx =
         Transaction::new_signed_with_payer(&ixs, Some(&claimant.key()), &[&keypair], blockhash);
 
     let signature = client
+        .client
         .send_and_confirm_transaction_with_spinner(&tx)
         .unwrap();
     println!("successfully claimed tokens with signature {signature:#?}",);

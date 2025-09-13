@@ -19,6 +19,10 @@ pub mod error;
 pub mod instructions;
 pub mod state;
 
+use light_sdk::{instruction::account_meta::CompressedAccountMeta, ValidityProof};
+
+use crate::state::claim_status::ClaimStatus;
+
 security_txt! {
     // Required fields
     name: "Merkle Distributor",
@@ -30,10 +34,11 @@ security_txt! {
     source_code: "https://github.com/jito-foundation/distributor"
 }
 
-declare_id!("mERKcfxMC5SqJn4Ld4BUris3WKZZ1ojjWJ3A3J5CKxv");
+declare_id!("GvefmwXvKSL8QvsMYq9EhWg1xgV1xSqECEUWrUvKNsxv");
 
 #[program]
 pub mod merkle_distributor {
+
     use super::*;
 
     /// READ THE FOLLOWING:
@@ -78,18 +83,32 @@ pub mod merkle_distributor {
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn new_claim(
-        ctx: Context<NewClaim>,
+    pub fn new_claim<'info>(
+        ctx: Context<'_, '_, '_, 'info, NewClaim<'info>>,
         amount_unlocked: u64,
         amount_locked: u64,
         proof: Vec<[u8; 32]>,
+        validity_proof: ValidityProof,
+        address_merkle_tree_root_index: u16,
     ) -> Result<()> {
-        handle_new_claim(ctx, amount_unlocked, amount_locked, proof)
+        handle_new_claim(
+            ctx,
+            amount_unlocked,
+            amount_locked,
+            proof,
+            validity_proof,
+            address_merkle_tree_root_index,
+        )
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn claim_locked(ctx: Context<ClaimLocked>) -> Result<()> {
-        handle_claim_locked(ctx)
+    pub fn claim_locked<'info>(
+        ctx: Context<'_, '_, '_, 'info, ClaimLocked<'info>>,
+        input_account_meta: CompressedAccountMeta,
+        claim_status: ClaimStatus,
+        validity_proof: ValidityProof,
+    ) -> Result<()> {
+        handle_claim_locked(ctx, input_account_meta, claim_status, validity_proof)
     }
 
     #[allow(clippy::result_large_err)]
