@@ -39,4 +39,10 @@ pub enum ErrorCode {
     TimestampsNotInFuture,
     #[msg("Airdrop Version Mismatch")]
     InvalidVersion,
+    #[msg("Invalid address tree")]
+    InvalidAddressTree,
+    #[msg("Failed to create Light account")]
+    LightAccountCreationFailed,
+    #[msg("Failed to invoke Light system program")]
+    LightCpiFailed,
 }

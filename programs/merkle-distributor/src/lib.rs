@@ -19,6 +19,13 @@ pub mod error;
 pub mod instructions;
 pub mod state;
 
+use light_sdk::{
+    cpi::{derive_light_cpi_signer, CpiSigner},
+    instruction::{account_meta::CompressedAccountMeta, PackedAddressTreeInfo, ValidityProof},
+};
+
+use crate::state::claim_status::ClaimStatusInstructionData;
+
 security_txt! {
     // Required fields
     name: "Merkle Distributor",
@@ -32,8 +39,13 @@ security_txt! {
 
 declare_id!("mERKcfxMC5SqJn4Ld4BUris3WKZZ1ojjWJ3A3J5CKxv");
 
+/// CPI signer for invoking the Light system program
+pub const LIGHT_CPI_SIGNER: CpiSigner =
+    derive_light_cpi_signer!("mERKcfxMC5SqJn4Ld4BUris3WKZZ1ojjWJ3A3J5CKxv");
+
 #[program]
 pub mod merkle_distributor {
+
     use super::*;
 
     /// READ THE FOLLOWING:
@@ -78,18 +90,34 @@ pub mod merkle_distributor {
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn new_claim(
-        ctx: Context<NewClaim>,
+    pub fn new_claim<'info>(
+        ctx: Context<'_, '_, '_, 'info, NewClaim<'info>>,
         amount_unlocked: u64,
         amount_locked: u64,
         proof: Vec<[u8; 32]>,
+        validity_proof: ValidityProof,
+        address_tree_info: PackedAddressTreeInfo,
+        output_state_tree_index: u8,
     ) -> Result<()> {
-        handle_new_claim(ctx, amount_unlocked, amount_locked, proof)
+        handle_new_claim(
+            ctx,
+            amount_unlocked,
+            amount_locked,
+            proof,
+            validity_proof,
+            address_tree_info,
+            output_state_tree_index,
+        )
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn claim_locked(ctx: Context<ClaimLocked>) -> Result<()> {
-        handle_claim_locked(ctx)
+    pub fn claim_locked<'info>(
+        ctx: Context<'_, '_, '_, 'info, ClaimLocked<'info>>,
+        input_account_meta: CompressedAccountMeta,
+        claim_status_data: ClaimStatusInstructionData,
+        validity_proof: ValidityProof,
+    ) -> Result<()> {
+        handle_claim_locked(ctx, input_account_meta, claim_status_data, validity_proof)
     }
 
     #[allow(clippy::result_large_err)]
@@ -105,5 +133,20 @@ pub mod merkle_distributor {
     #[allow(clippy::result_large_err)]
     pub fn set_admin(ctx: Context<SetAdmin>) -> Result<()> {
         handle_set_admin(ctx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Validates that declare_id! and derive_light_cpi_signer! use the same program ID.
+    /// CI will fail if these diverge after a program ID change.
+    #[test]
+    fn test_program_id_consistency() {
+        const EXPECTED_PROGRAM_ID: &str = "mERKcfxMC5SqJn4Ld4BUris3WKZZ1ojjWJ3A3J5CKxv";
+        assert_eq!(
+            crate::ID.to_string(),
+            EXPECTED_PROGRAM_ID,
+            "declare_id! does not match expected program ID"
+        );
     }
 }

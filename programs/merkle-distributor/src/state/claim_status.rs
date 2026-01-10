@@ -1,19 +1,40 @@
 use anchor_lang::prelude::*;
+use light_sdk::LightDiscriminator;
 
 use crate::error::ErrorCode::ArithmeticError;
 
 /// Holds whether or not a claimant has claimed tokens.
 #[account]
-#[derive(Default)]
+#[derive(Default, Debug, LightDiscriminator)]
 pub struct ClaimStatus {
     /// Authority that claimed the tokens.
     pub claimant: Pubkey,
-    /// Locked amount  
+    /// Locked amount
     pub locked_amount: u64,
     /// Locked amount withdrawn
     pub locked_amount_withdrawn: u64,
     /// Unlocked amount
     pub unlocked_amount: u64,
+}
+
+/// Instruction data for ClaimStatus without claimant field.
+/// The claimant is derived from the signer account.
+#[derive(Default, Debug, AnchorDeserialize, AnchorSerialize)]
+pub struct ClaimStatusInstructionData {
+    pub locked_amount: u64,
+    pub locked_amount_withdrawn: u64,
+    pub unlocked_amount: u64,
+}
+
+impl ClaimStatusInstructionData {
+    pub fn into_claim_status(self, claimant: Pubkey) -> ClaimStatus {
+        ClaimStatus {
+            claimant,
+            locked_amount: self.locked_amount,
+            locked_amount_withdrawn: self.locked_amount_withdrawn,
+            unlocked_amount: self.unlocked_amount,
+        }
+    }
 }
 
 impl ClaimStatus {
@@ -32,7 +53,7 @@ impl ClaimStatus {
     }
 
     /// Total amount unlocked
-    /// Equal to (time_into_unlock / total_unlock_time) * locked_amount  
+    /// Equal to (time_into_unlock / total_unlock_time) * locked_amount
     /// Multiplication safety:
     ///    The maximum possible product is (2^64 -1) * (2^64 -1) = 2^128 - 2^65 + 1
     ///    which is less than 2^128 - 1 (the maximum value of a u128), meaning that

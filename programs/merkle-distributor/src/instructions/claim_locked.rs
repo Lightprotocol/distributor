@@ -1,5 +1,5 @@
 use anchor_lang::{
-    accounts::{account::Account, program::Program, signer::Signer},
+    accounts::{account::Account, signer::Signer},
     context::{Context, CpiContext},
     emit,
     prelude::*,
@@ -7,12 +7,23 @@ use anchor_lang::{
 };
 use anchor_spl::token::{self, Token, TokenAccount};
 
+use light_sdk::{
+    account::LightAccount,
+    cpi::{
+        v2::{CpiAccounts, LightSystemProgramCpi},
+        InvokeLightSystemProgram, LightCpiInstruction,
+    },
+    instruction::{account_meta::CompressedAccountMeta, ValidityProof},
+};
+
 use crate::{
     error::ErrorCode,
     state::{
-        claim_status::ClaimStatus, claimed_event::ClaimedEvent,
+        claim_status::{ClaimStatus, ClaimStatusInstructionData},
+        claimed_event::ClaimedEvent,
         merkle_distributor::MerkleDistributor,
     },
+    LIGHT_CPI_SIGNER,
 };
 
 /// [merkle_distributor::claim_locked] accounts.
@@ -21,19 +32,6 @@ pub struct ClaimLocked<'info> {
     /// The [MerkleDistributor].
     #[account(mut)]
     pub distributor: Account<'info, MerkleDistributor>,
-
-    /// Claim Status PDA
-    #[account(
-        mut,
-        seeds = [
-            b"ClaimStatus".as_ref(),
-            claimant.key().to_bytes().as_ref(),
-            distributor.key().to_bytes().as_ref()
-        ],
-        bump,
-    )]
-    pub claim_status: Account<'info, ClaimStatus>,
-
     /// Distributor ATA containing the tokens to distribute.
     #[account(
         mut,
@@ -42,7 +40,6 @@ pub struct ClaimLocked<'info> {
         address = distributor.token_vault,
     )]
     pub from: Account<'info, TokenAccount>,
-
     /// Account to send the claimed tokens to.
     /// Claimant must sign the transaction and can only claim on behalf of themself
     #[account(mut, token::authority = claimant.key())]
@@ -63,10 +60,17 @@ pub struct ClaimLocked<'info> {
 ///     3. The locked amount withdrawn is ≤ than the locked amount
 ///     4. The distributor amount claimed is ≤ than the max total claim
 #[allow(clippy::result_large_err)]
-pub fn handle_claim_locked(ctx: Context<ClaimLocked>) -> Result<()> {
+pub fn handle_claim_locked<'info>(
+    ctx: Context<'_, '_, '_, 'info, ClaimLocked<'info>>,
+    input_account_meta: CompressedAccountMeta,
+    claim_status_data: ClaimStatusInstructionData,
+    validity_proof: ValidityProof,
+) -> Result<()> {
+    let claim_status = claim_status_data.into_claim_status(ctx.accounts.claimant.key());
+    let mut claim_status =
+        LightAccount::<ClaimStatus>::new_mut(&crate::ID, &input_account_meta, claim_status)?;
     let distributor = &ctx.accounts.distributor;
 
-    let claim_status = &mut ctx.accounts.claim_status;
     let curr_ts = Clock::get()?.unix_timestamp;
 
     require!(!distributor.clawed_back, ErrorCode::ClaimExpired);
@@ -124,6 +128,17 @@ pub fn handle_claim_locked(ctx: Context<ClaimLocked>) -> Result<()> {
 
     let days = remaining_seconds / (24 * 60 * 60); // number of days
     let seconds_after_days = remaining_seconds % (24 * 60 * 60); // Remaining seconds after subtracting full days
+
+    // Create CPI accounts and invoke Light system program
+    let light_cpi_accounts = CpiAccounts::new(
+        ctx.accounts.claimant.as_ref(),
+        ctx.remaining_accounts,
+        LIGHT_CPI_SIGNER,
+    );
+
+    LightSystemProgramCpi::new_cpi(LIGHT_CPI_SIGNER, validity_proof)
+        .with_light_account(claim_status)?
+        .invoke(light_cpi_accounts)?;
 
     // Note: might get truncated, do not rely on
     msg!(

@@ -46,7 +46,6 @@ impl AirdropMerkleTree {
             tree_nodes_map
                 .entry(claimant)
                 .and_modify(|n| {
-                    println!("duplicate claimant {} found, combining", n.claimant);
                     n.total_unlocked_staker = n
                         .total_unlocked_staker
                         .checked_add(tree_node.total_unlocked_staker)
@@ -100,10 +99,6 @@ impl AirdropMerkleTree {
             tree_nodes,
         };
 
-        println!(
-            "created merkle tree with {} nodes and max total claim of {}",
-            tree.max_num_nodes, tree.max_total_claim
-        );
         tree.validate()?;
         Ok(tree)
     }

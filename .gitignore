@@ -142,3 +142,8 @@ __pycache__/
 artifacts/
 src/idls/
 data/distributor-info.json
+test-ledger
+merkle_tree.json
+test_*.csv
+test_*.json
+**/test_keys/
