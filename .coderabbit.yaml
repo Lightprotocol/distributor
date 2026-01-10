@@ -10,12 +10,11 @@ reviews:
     - "!dist/**"
     - "!target/**"
     - "!.git/**"
-    - "program-libs/**"
     - "programs/**"
-    - "sdk-libs/**"
-    - "prover/**"
-    - "forester/**"
-    - "docs/**"
+    - "api/**"
+    - "cli/**"
+    - "merkle-tree/**"
+    - "*.toml"
     - "*.md"
     - "!LICENSE"
 
@@ -83,6 +82,7 @@ reviews:
       - "!dependabot"
     base_branches:
       - "main"
+      - "master"
       - "release/*"
 
 chat:
@@ -102,13 +102,8 @@ knowledge_base:
   code_guidelines:
     enabled: true
     filePatterns:
-      - "*/docs/**"
-      - "*/**/README.md"
-      - "program-libs/batched-merkle-tree/docs/**"
-      - "program-libs/account-checks/docs/**"
-      - "program-libs/compressible/docs/**"
-      - "*/**/CLAUDE.md"
-      - "DOCS.md"
+      - "**/README.md"
+      - "**/CLAUDE.md"
 
 # Additional configuration for Light Protocol specific patterns
 early_access: true
