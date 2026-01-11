@@ -120,8 +120,12 @@ async fn get_claim_status(
     node: &TreeNode,
     user_pubkey: &Pubkey,
 ) -> Result<ClaimStatus> {
-    let (claim_status_pda, _bump) =
-        get_claim_status_pda(&state.program_id, user_pubkey, &state.distributor_pubkey);
+    let (claim_status_pda, _) = get_claim_status_pda(
+        &state.program_id,
+        user_pubkey,
+        &state.distributor_pubkey,
+    );
+    let claim_status_pda = Pubkey::new_from_array(claim_status_pda);
 
     let mut accounts = state
         .rpc_client

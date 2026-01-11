@@ -1,6 +1,6 @@
 [toolchain]
-anchor_version = "0.29.0"
-solana_version = "1.16.9" # Solana version to use
+anchor_version = "0.31.1"
+solana_version = "2.2.14" 
 
 [features]
 seeds = true
@@ -9,9 +9,7 @@ seeds = true
 url = "https://api.apr.dev"
 
 [workspace]
-members = [
-    "programs/merkle-distributor",
-]
+members = ["programs/merkle-distributor"]
 
 [provider]
 cluster = "testnet"

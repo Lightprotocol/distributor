@@ -1,10 +1,7 @@
 // Instruction to clawback funds once they have expired
 
 use anchor_lang::{context::Context, prelude::*, Accounts, Key, Result};
-use anchor_spl::{
-    token,
-    token::{Token, TokenAccount},
-};
+use anchor_spl::token::{self, Token, TokenAccount};
 
 use crate::{error::ErrorCode, state::merkle_distributor::MerkleDistributor};
 
@@ -43,6 +40,7 @@ pub struct Clawback<'info> {
 /// 1. Checking that the lockup has expired
 /// 2. Transferring remaining funds from the vault to the clawback receiver
 /// 3. Marking the distributor as clawed back
+///
 /// CHECK:
 ///     1. The distributor has not already been clawed back
 #[allow(clippy::result_large_err)]
@@ -64,6 +62,7 @@ pub fn handle_clawback(ctx: Context<Clawback>) -> Result<()> {
         &[ctx.accounts.distributor.bump],
     ];
 
+    #[allow(deprecated)]
     token::transfer(
         CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
